@@ -8,6 +8,10 @@ __pycache__/
 
 #env
 .bpr-mf/
+.recmodels/
+
+# data files
+data/
 
 # Distribution / packaging
 .Python
