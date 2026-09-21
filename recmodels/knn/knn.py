@@ -22,21 +22,35 @@ def idx_continous(df, col):
         return False
 
 
-class Uknn(BaseModel):
+class Knn(BaseModel):
+    def forward(self, users, items):
+        pass
+
     def build_interaction_tensor_from_df(self):
-        matrix = torch.zeros(size=(self.n_users, self.n_items))
         coordinates = self.df.values
-        rows = coordinates[:, 0]
-        cols = coordinates[:, 1]
+        if self.user_based:
+            matrix = torch.zeros(size=(self.n_users, self.n_items))
+            rows = coordinates[:, 0]
+            cols = coordinates[:, 1]
+        else:
+            matrix = torch.zeros(size=(self.n_items, self.n_users))
+            rows = coordinates[:, 1]
+            cols = coordinates[:, 0]
+
         matrix[rows, cols] = 1
         return matrix
 
-    def jaccard_similarity_matrix(self, user_based=True):
+    def fit(self, train_df, debug=False):
+        self.df = self.train.copy()
+        self.interaction_matrix = self.build_interaction_tensor_from_df()
+        self.similarity_matrix = self._jaccard_similarity_matrix()
+
+    def _jaccard_similarity_matrix(self):
         """
         Computes full pairwise Jaccard similarity matrix.
         Returns (n_users, n_users) if user_based, else (n_items, n_items).
         """
-        M = self.interaction_matrix if user_based else self.interaction_matrix.T
+        M = self.interaction_matrix if self.user_based else self.interaction_matrix.T
         M = M.float()
 
         intersection = (
@@ -55,27 +69,29 @@ class Uknn(BaseModel):
 
         return similarity
 
-    def get_batch_neighborhoods(self, users, k=10):
-        sims = self.similarity_matrix[users].clone()
+    def _get_batch_neighborhoods(self, col, k):
+        sims = self.similarity_matrix[col].clone()
         # ingore main diagonal
-        sims[torch.arange(len(users)), users] = -1
+        sims[torch.arange(len(col)), col] = -1
         return torch.topk(sims, k).indices
 
-    def score(self, users, items, k=10):
+    def score(self, row, col, k):
+        # when user_based, row = user, col = items. elsewhise for item_based knn.
+        # this documentation assumes user_based=True for simplicity.
 
         # (n_u, k)
-        neighbors = self.get_batch_neighborhoods(users, k)
+        neighbors = self._get_batch_neighborhoods(row, k)
         # (n_u, k)
-        sims = self.similarity_matrix[users.unsqueeze(1), neighbors]
+        sims = self.similarity_matrix[row.unsqueeze(1), neighbors]
 
         sum_all_sims = sims.sum(dim=1)  # (n_u,)
-        sum_filtered_sims = torch.zeros(len(users), len(items))  # (n_u, n_i)
+        sum_filtered_sims = torch.zeros(len(row), len(col))  # (n_u, n_i)
 
         for i in range(k):
             neighbor_i = neighbors[:, i]  # (n_u,)
             sim_i = sims[:, i]  # (n_u,)
-            # check if each neighbor has interacted with the candidate items (n_u, n_i).
-            interacted_i = self.interaction_matrix[neighbor_i][:, items].bool()
+            # check if each neighbor has interacted with the candidate col (n_u, n_i).
+            interacted_i = self.interaction_matrix[neighbor_i][:, col].bool()
             # masks out neighbors without interaction for the particular item.
             sum_filtered_sims += sim_i.unsqueeze(1) * interacted_i
 
@@ -86,8 +102,9 @@ class Uknn(BaseModel):
         )
         return scores
 
-    def __init__(self, df):
+    def __init__(self, df, user_based):
         new_df = df.copy()
+        self.user_based = user_based
         if not idx_continous(df, "user"):
             new_df.loc[:, "userIdx"] = df["user"].astype("category").cat.codes
         if not idx_continous(df, "item"):
@@ -96,15 +113,15 @@ class Uknn(BaseModel):
         self.n_users = self.df.userIdx.max() + 1
         self.n_items = self.df.itemIdx.max() + 1
         self.interaction_matrix = self.build_interaction_tensor_from_df()
-        self.similarity_matrix = self.jaccard_similarity_matrix()
+        self.similarity_matrix = self._jaccard_similarity_matrix()
 
-    def recommend(self, users, items, k=10, top_n=None):
-        scores = self.score(users, items, k)  # (B_u, B_i)
+    def recommend(self, row, col, k, top_n):
+        scores = self.score(row, col, k)
 
         if top_n is None:
-            top_n = len(items)
+            top_n = len(col)
 
         top_scores, top_positions = torch.topk(scores, top_n, dim=1)
-        top_item_ids = items[top_positions]
+        top_item_ids = col[top_positions]
 
         return top_item_ids, top_scores
