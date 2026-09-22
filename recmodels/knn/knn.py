@@ -22,6 +22,16 @@ def idx_continous(df, col):
         return False
 
 
+def preprocess_df(df):
+    new_df = df.copy()
+    if not idx_continous(df, "user"):
+        new_df.loc[:, "user"] = df["user"].astype("category").cat.codes
+    if not idx_continous(df, "item"):
+        new_df.loc[:, "item"] = df["item"].astype("category").cat.codes
+
+    return df
+
+
 class Knn(BaseModel):
     def forward(self, users, items):
         pass
@@ -41,7 +51,8 @@ class Knn(BaseModel):
         return matrix
 
     def fit(self, train_df, debug=False):
-        self.df = self.train.copy()
+        new_df = preprocess_df(train_df)
+        self.df = new_df[["user", "item"]]
         self.interaction_matrix = self.build_interaction_tensor_from_df()
         self.similarity_matrix = self._jaccard_similarity_matrix()
 
@@ -102,26 +113,27 @@ class Knn(BaseModel):
         )
         return scores
 
-    def __init__(self, df, user_based):
-        new_df = df.copy()
+    def __init__(self, df, user_based, k_neighbors=10):
         self.user_based = user_based
-        if not idx_continous(df, "user"):
-            new_df.loc[:, "userIdx"] = df["user"].astype("category").cat.codes
-        if not idx_continous(df, "item"):
-            new_df.loc[:, "itemIdx"] = df["item"].astype("category").cat.codes
-        self.df = new_df
-        self.n_users = self.df.userIdx.max() + 1
-        self.n_items = self.df.itemIdx.max() + 1
+        self.k_neighbors = k_neighbors
+        new_df = preprocess_df(df)
+        self.df = new_df[["user", "item"]]
+        self.n_users = self.df.user.max() + 1
+        self.n_items = self.df.item.max() + 1
         self.interaction_matrix = self.build_interaction_tensor_from_df()
         self.similarity_matrix = self._jaccard_similarity_matrix()
 
-    def recommend(self, row, col, k, top_n):
-        scores = self.score(row, col, k)
+    def recommend(self, users, k, candidates, mask=None):
+        row, col = (users, candidates) if self.user_based else (candidates, users)
+        scores = self.score(row, col, self.k_neighbors)
+        if not self.user_based:
+            scores = scores.T
+        if mask is not None:
+            scores = torch.where(
+                mask == 1, scores, torch.full_like(scores, float("-inf"))
+            )
 
-        if top_n is None:
-            top_n = len(col)
-
-        top_scores, top_positions = torch.topk(scores, top_n, dim=1)
-        top_item_ids = col[top_positions]
+        top_scores, top_positions = torch.topk(scores, k, dim=1)
+        top_item_ids = candidates[top_positions]
 
         return top_item_ids, top_scores
