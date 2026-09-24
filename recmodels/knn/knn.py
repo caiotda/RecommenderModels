@@ -11,6 +11,8 @@ from recmodels.model import BaseModel
 from tqdm import trange
 import gc
 
+dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def idx_continous(df, col):
     min_idx = df[col].min()
@@ -28,8 +30,8 @@ def preprocess_df(df):
         new_df.loc[:, "user"] = df["user"].astype("category").cat.codes
     if not idx_continous(df, "item"):
         new_df.loc[:, "item"] = df["item"].astype("category").cat.codes
-
-    return df
+    new_df[["user", "item"]] = new_df[["user", "item"]].astype(int)
+    return new_df
 
 
 class Knn(BaseModel):
@@ -39,11 +41,11 @@ class Knn(BaseModel):
     def build_interaction_tensor_from_df(self):
         coordinates = self.df.values
         if self.user_based:
-            matrix = torch.zeros(size=(self.n_users, self.n_items))
+            matrix = torch.zeros(size=(self.n_users, self.n_items), device=self.device)
             rows = coordinates[:, 0]
             cols = coordinates[:, 1]
         else:
-            matrix = torch.zeros(size=(self.n_items, self.n_users))
+            matrix = torch.zeros(size=(self.n_items, self.n_users), device=self.device)
             rows = coordinates[:, 1]
             cols = coordinates[:, 0]
 
@@ -114,8 +116,10 @@ class Knn(BaseModel):
         return scores
 
     def __init__(self, df, user_based, k_neighbors=10):
+        super().__init__()
         self.user_based = user_based
         self.k_neighbors = k_neighbors
+        self.device = dev
         new_df = preprocess_df(df)
         self.df = new_df[["user", "item"]]
         self.n_users = self.df.user.max() + 1
