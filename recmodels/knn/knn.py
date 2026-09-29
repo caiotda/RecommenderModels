@@ -14,22 +14,8 @@ import gc
 dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def idx_continous(df, col):
-    min_idx = df[col].min()
-    max_idx = df[col].max()
-    n_unique_idx = df[col].nunique()
-    if min_idx == 0 and n_unique_idx == max_idx + 1:
-        return True
-    else:
-        return False
-
-
 def preprocess_df(df):
     new_df = df.copy()
-    if not idx_continous(df, "user"):
-        new_df.loc[:, "user"] = df["user"].astype("category").cat.codes
-    if not idx_continous(df, "item"):
-        new_df.loc[:, "item"] = df["item"].astype("category").cat.codes
     new_df[["user", "item"]] = new_df[["user", "item"]].astype(int)
     return new_df
 
