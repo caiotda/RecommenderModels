@@ -82,7 +82,9 @@ class Knn(BaseModel):
         sims = self.similarity_matrix[row.unsqueeze(1), neighbors]
 
         sum_all_sims = sims.sum(dim=1)  # (n_u,)
-        sum_filtered_sims = torch.zeros(len(row), len(col))  # (n_u, n_i)
+        sum_filtered_sims = torch.zeros(
+            len(row), len(col), device=self.device
+        )  # (n_u, n_i)
 
         for i in range(k):
             neighbor_i = neighbors[:, i]  # (n_u,)
@@ -95,7 +97,7 @@ class Knn(BaseModel):
         scores = torch.where(
             sum_all_sims.unsqueeze(1) > 0,
             sum_filtered_sims / sum_all_sims.unsqueeze(1),
-            torch.zeros_like(sum_filtered_sims),
+            torch.zeros_like(sum_filtered_sims, device=self.device),
         )
         return scores
 
@@ -114,11 +116,15 @@ class Knn(BaseModel):
     def recommend(self, users, k, candidates, mask=None):
         row, col = (users, candidates) if self.user_based else (candidates, users)
         scores = self.score(row, col, self.k_neighbors)
+
         if not self.user_based:
             scores = scores.T
         if mask is not None:
+            mask = mask.to(self.device)
             scores = torch.where(
-                mask == 1, scores, torch.full_like(scores, float("-inf"))
+                mask == 1,
+                scores,
+                torch.full_like(scores, float("-inf"), device=self.device),
             )
 
         top_scores, top_positions = torch.topk(scores, k, dim=1)
