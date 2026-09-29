@@ -36,7 +36,7 @@ class Knn(BaseModel):
             cols = coordinates[:, 0]
 
         matrix[rows, cols] = 1
-        return matrix
+        return matrix.float()
 
     def fit(self, train_df, debug=False):
         new_df = preprocess_df(train_df)
@@ -49,9 +49,7 @@ class Knn(BaseModel):
         Computes full pairwise Jaccard similarity matrix.
         Returns (n_users, n_users) if user_based, else (n_items, n_items).
         """
-        M = self.interaction_matrix if self.user_based else self.interaction_matrix.T
-        M = M.float()
-
+        M = self.interaction_matrix
         intersection = (
             M @ M.T
         )  # I[i,j] represents the ammount of shared interactions between users i and j (likewise for user_Based=false, for items)
