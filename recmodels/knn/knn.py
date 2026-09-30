@@ -8,6 +8,7 @@ import pandas as pd
 
 
 from recmodels.model import BaseModel
+from recmodels.evaluation import _compute_map_at_k
 from tqdm import trange
 import gc
 
@@ -131,3 +132,36 @@ class Knn(BaseModel):
         top_item_ids = candidates[top_positions]
 
         return top_item_ids, top_scores
+
+    def evaluate(self, train_df, oot_df, oracle_df_pos, k=20, batch_size=256):
+        train_pos = train_df.groupby("user")["item"].apply(set)
+        oracle_pos = oracle_df_pos.groupby("user")["item"].apply(set)
+
+        oot_users = set(oot_df["user"].unique())
+        eval_users = sorted(oot_users & set(oracle_pos.index) & set(train_pos.index))
+        if not eval_users:
+            return 0.0
+
+        all_items = torch.arange(self.n_items, device=self.device)
+        top_k_batches = []
+
+        with torch.no_grad():
+            for start in range(0, len(eval_users), batch_size):
+                batch_users = eval_users[start : start + batch_size]
+
+                # mask: 1 = rankable, 0 = already seen in train (recommend() keeps mask == 1)
+                mask = torch.ones(len(batch_users), self.n_items, device=self.device)
+                for i, user_id in enumerate(batch_users):
+                    seen = torch.tensor(list(train_pos[user_id]), device=self.device)
+                    mask[i, seen] = 0
+
+                top_items, _ = self.recommend(
+                    users=torch.tensor(batch_users, device=self.device),
+                    k=k,
+                    candidates=all_items,
+                    mask=mask,
+                )
+                top_k_batches.append(top_items.cpu().numpy())
+
+        top_k = np.concatenate(top_k_batches, axis=0)
+        return _compute_map_at_k(top_k, eval_users, oracle_pos, k)
