@@ -40,6 +40,14 @@ class Knn(BaseModel):
         return matrix.float()
 
     def fit(self, train_df, debug=False):
+        # Freeing up redundant space in torch.device; notice that
+        # we are recreating interaction and similarity matrix in fit,
+        # so we delete the older version.
+        self.interaction_matrix = None
+        self.similarity_matrix = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
         new_df = preprocess_df(train_df)
         self.df = new_df[["user", "item"]]
         self.interaction_matrix = self.build_interaction_tensor_from_df()
@@ -68,7 +76,7 @@ class Knn(BaseModel):
         return similarity
 
     def _get_batch_neighborhoods(self, col, k):
-        sims = self.similarity_matrix[col].clone()
+        sims = self.similarity_matrix[col]
         # ingore main diagonal
         sims[torch.arange(len(col)), col] = -1
         return torch.topk(sims, k).indices
