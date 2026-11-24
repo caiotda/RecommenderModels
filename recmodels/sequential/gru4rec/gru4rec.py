@@ -72,7 +72,14 @@ class Gru4rec(BaseModel):
             .head(self.session_size)
             .sort_values(self.timestamp_col, kind="stable")
         )
-        grouped = filtered_sessions_df.groupby(USER_COL).agg({"item": list})
+        users_np = users.cpu().numpy()
+        grouped = (
+            filtered_sessions_df.groupby(self.user_col)[self.item_col]
+            .agg(list)
+            .reindex(users_np)  # one row per user, in `users` order
+            .apply(lambda x: x if isinstance(x, list) else [])
+            .to_frame(self.item_col)
+        )
         return self._predict(grouped)
 
     @torch.no_grad()
@@ -83,7 +90,7 @@ class Gru4rec(BaseModel):
         histories: DataFrame, one row per session, `item_col` = list of raw item ids (chronological)
         returns:   tensor (n_users, n_items); row r = histories row r, column i = internal item index i
         """
-        dev = self.predictor.dev
+        dev = self.predictor.device
         sequences = histories[item_col]
         # raw ids -> internal indices, unknown items dropped
         mapped_sequences = self.map_to_model_idx(sequences)
