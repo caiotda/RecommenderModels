@@ -2,10 +2,10 @@ import numpy as np
 import torch
 
 
-from recmodels.recmodels.sequential.gru4rec.gru4rec_hidasi import GRU4RecHidasi
+from recmodels.sequential.gru4rec.gru4rec_hidasi import GRU4RecHidasi
 from recmodels.model import BaseModel
 
-from dynamicTasteDistortion.dynamicTasteDistortion.simulationConstants import (
+from dynamicTasteDistortion.simulationConstants import (
     USER_COL,
     ITEM_COL,
     TIMESTAMP_COL,
@@ -20,14 +20,19 @@ class Gru4rec(BaseModel):
         user_col=USER_COL,
         item_col=ITEM_COL,
         timestamp_col=TIMESTAMP_COL,
+        session_size=50,
     ):
         super().__init__()
         self.user_col = user_col
         self.item_col = item_col
         self.timestamp_col = timestamp_col
         self.predictor = GRU4RecHidasi(device=dev, **params_dict)
-        # TODO: embed simulation param here
-        self.session_size = params_dict.retrain_window
+        self.session_size = session_size
+    
+    def forward(self, users, items):
+        raise NotImplementedError(
+            "Gru4rec scores from user histories; use predict/recommend instead."
+        )
 
     def _set_train_df(self, train_df):
         df = train_df.sort_values([self.user_col, self.timestamp_col], kind="stable")
@@ -56,8 +61,8 @@ class Gru4rec(BaseModel):
     def map_to_model_idx(self, items):
         return [self._to_model_idx(item)[0] for item in items]
 
-    def recommend(self, users, k, candidates, mask=None, history=None):
-        scores = self.predict(users, candidates, history)  # (n_users, n_model_items)
+    def recommend(self, users, k, candidates, history, mask=None, ):
+        scores = self.predict(users, history)  # (n_users, n_model_items)
         dev = scores.device
         n_users, n_candidates = len(users), len(candidates)
 
@@ -81,31 +86,21 @@ class Gru4rec(BaseModel):
 
         return candidate_ids, top_scores
 
-    def predict(self, users, candidates, history):
+    def predict(self, users, history):
         """Score users from recent history.
         users and candidates are torch tensors, and history is a
         DataFrame of recent interactions. The history is filtered to the
         requested users and candidates, then grouped into sessions containing
         at most self.session_size interactions.
         """
-        filtered_sessions_df = history[
-            (history[self.user_col].isin(users))
-            & (history[self.item_col].isin(candidates))
-        ]
-        filtered_sessions_df = (
-            filtered_sessions_df.sort_values(
-                self.timestamp_col, ascending=False, kind="stable"
-            )
-            .groupby(self.user_col, sort=False)
-            .head(self.session_size)
-            .sort_values(self.timestamp_col, kind="stable")
-        )
         users_np = users.cpu().numpy()
         grouped = (
-            filtered_sessions_df.groupby(self.user_col)[self.item_col]
+            history.groupby(self.user_col, sort=False)
+            .tail(self.session_size)                    # last session_size interactions per user, order kept
+            .groupby(self.user_col)[self.item_col]
             .agg(list)
-            .reindex(users_np)  # one row per user, in `users` order
-            .apply(lambda x: x if isinstance(x, list) else [])
+            .reindex(users_np)                          # one row per user, in `users` order
+            .apply(lambda x: x if isinstance(x, list) else [])  # no history -> empty list
             .to_frame(self.item_col)
         )
         return self._predict(grouped)
