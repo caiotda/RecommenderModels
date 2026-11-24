@@ -45,13 +45,41 @@ class Gru4rec(BaseModel):
             time_key=self.timestamp_col,
         )
 
+    def _to_model_idx(self, ids):
+        """Raw ids -> (internal indices of the known ids, boolean mask of which ids are known)."""
+        idx = self.predictor.data_iterator.itemidmap.reindex(
+            ids
+        ).values  # NaN for unknown ids
+        known = ~np.isnan(idx)
+        return idx[known].astype(np.int64), known
+
     def map_to_model_idx(self, items):
-        imap = self.predictor.data_iterator.itemidmap
-        # reindex is just a indexing that handles unknown keys and returns NaN for them.
-        mapped_indices = [
-            imap.reindex(item).dropna().astype(np.int64).values for item in items
-        ]
-        return mapped_indices
+        return [self._to_model_idx(item)[0] for item in items]
+
+    def recommend(self, users, k, candidates, mask=None, history=None):
+        scores = self.predict(users, candidates, history)  # (n_users, n_model_items)
+        dev = scores.device
+        n_users, n_candidates = len(users), len(candidates)
+
+        # model columns -> candidate positions (candidates unknown to the model stay -inf)
+        model_cols, known = self._to_model_idx(candidates.cpu().numpy())
+        cand_pos = torch.tensor(np.flatnonzero(known), device=dev)
+        model_cols = torch.tensor(model_cols, device=dev)
+
+        prediction_matrix = torch.full(
+            (n_users, n_candidates), float("-inf"), device=dev
+        )
+        prediction_matrix[:, cand_pos] = scores[:, model_cols]
+
+        if mask is not None:
+            prediction_matrix = torch.where(
+                mask.to(dev) == 1, prediction_matrix, float("-inf")
+            )
+
+        top_scores, top_idx = prediction_matrix.topk(min(k, n_candidates), dim=1)
+        candidate_ids = candidates[top_idx.to(candidates.device)]
+
+        return candidate_ids, top_scores
 
     def predict(self, users, candidates, history):
         """Score users from recent history.
