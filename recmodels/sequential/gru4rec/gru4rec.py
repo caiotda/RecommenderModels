@@ -53,13 +53,26 @@ class Gru4rec(BaseModel):
         ]
         return mapped_indices
 
-    def predict(self, users, candidates):
-        filtered_sessions_df = self.session_based_df[
-            (self.session_based_df[self.user_col].isin(users))
-            &
-            (self.session_based_df[self.item_col].isin(candidates))
+    def predict(self, users, candidates, history):
+        """Score users from recent history.
+        users and candidates are torch tensors, and history is a
+        DataFrame of recent interactions. The history is filtered to the
+        requested users and candidates, then grouped into sessions containing
+        at most self.session_size interactions.
+        """
+        filtered_sessions_df = history[
+            (history[self.user_col].isin(users))
+            & (history[self.item_col].isin(candidates))
         ]
-        grouped = filtered_sessions_df.groupby("sessionId").agg({"item": list})
+        filtered_sessions_df = (
+            filtered_sessions_df.sort_values(
+                self.timestamp_col, ascending=False, kind="stable"
+            )
+            .groupby(self.user_col, sort=False)
+            .head(self.session_size)
+            .sort_values(self.timestamp_col, kind="stable")
+        )
+        grouped = filtered_sessions_df.groupby(USER_COL).agg({"item": list})
         return self._predict(grouped)
 
     @torch.no_grad()
